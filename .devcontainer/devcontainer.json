@@ -1,0 +1,19 @@
+{
+  "name": "Skylark Full Stack",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.21-bullseye",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "golang.go"
+      ]
+    }
+  },
+  "forwardPorts": [3001, 5173, 8080],
+  "postCreateCommand": "bash .devcontainer/setup.sh"
+}

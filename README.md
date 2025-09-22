@@ -52,6 +52,7 @@ npm install
 Create `.env` in `backend/` with your database connection string:
 ```env
 DATABASE_URL="postgresql://user:password@localhost:5432/skylark"
+JWT_SECRET="super-secret-key-change-this"
 ```
 
 ### 3. Prisma setup

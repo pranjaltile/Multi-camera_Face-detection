@@ -30,8 +30,8 @@ type CameraProcessor struct {
 var (
 	backendURL       = getEnv("BACKEND_URL", "http://localhost:3001")
 	cascPath         = getEnv("CASCADE_PATH", "./haarcascade_frontalface_default.xml")
-	classifier       gocv.CascadeClassifier
 	videoReadTimeout = 3 * time.Second
+	classifier       gocv.CascadeClassifier
 )
 
 func main() {
@@ -44,7 +44,7 @@ func main() {
 	}
 	defer classifier.Close()
 
-	// Example camera (for testing, later you can fetch list from backend)
+	// Example camera (for testing)
 	camera := CameraProcessor{
 		ID:       "cam1",
 		Name:     "IPCam",
@@ -53,8 +53,11 @@ func main() {
 		Location: "Office Lobby",
 	}
 
-	// Start detecting
-	processCamera(camera)
+	if camera.Enabled {
+		processCamera(camera)
+	} else {
+		log.Println("⚠️ Camera is disabled, skipping...")
+	}
 }
 
 func processCamera(camera CameraProcessor) {
@@ -79,10 +82,9 @@ func processCamera(camera CameraProcessor) {
 		rects := classifier.DetectMultiScale(img)
 
 		if len(rects) > 0 {
-			// logging
-			fmt.Printf("🚨 %d faces detected in %s at %s\n", len(rects), camera.Name, time.Now().Format(time.RFC3339))
+			fmt.Printf("🚨 %d faces detected in %s\n", len(rects), camera.Name)
 
-			// send alert
+			// Send alert to backend
 			sendAlert(camera.ID, 0.95, len(rects))
 		}
 	}
@@ -96,20 +98,28 @@ func sendAlert(cameraID string, confidence float64, faceCount int) {
 		Timestamp:  time.Now(),
 	}
 
-	alertData, _ := json.Marshal(alert)
+	alertData, err := json.Marshal(alert)
+	if err != nil {
+		log.Printf("❌ Failed to marshal alert: %v", err)
+		return
+	}
 
 	resp, err := http.Post(backendURL+"/api/alerts",
 		"application/json",
 		bytes.NewBuffer(alertData))
-
 	if err != nil {
 		log.Printf("❌ Failed to send alert: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("✅ Alert sent: Camera=%s, Faces=%d, Confidence=%.2f at %s\n",
-		cameraID, faceCount, confidence, time.Now().Format(time.RFC3339))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("⚠️ Backend responded with status: %s", resp.Status)
+		return
+	}
+
+	fmt.Printf("✅ Alert sent: Camera=%s, Faces=%d, Confidence=%.2f\n",
+		cameraID, faceCount, confidence)
 }
 
 func getEnv(key, defaultValue string) string {

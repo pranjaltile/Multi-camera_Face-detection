@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
 import './Login.css'
 
+import type { User } from '../types/user'
+
 interface LoginProps {
-  onLogin: (token: string, user: any) => void
+  onLogin: (token: string, user: User) => void
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -18,6 +20,7 @@ export default function Login({ onLogin }: LoginProps) {
     setError('')
 
     try {
+      console.log('Attempting login/register...');
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register'
       const response = await fetch(`http://localhost:3001${endpoint}`, {
         method: 'POST',
@@ -28,15 +31,23 @@ export default function Login({ onLogin }: LoginProps) {
       })
 
       const data = await response.json()
+      console.log('Server response:', { status: response.status, data });
 
-      if (response.ok) {
-        localStorage.setItem('token', data.token)
+      if (response.ok && data.token && data.user) {
+        // Validate user data structure
+        if (!data.user.username) {
+          throw new Error('Invalid user data received')
+        }
+        
+        console.log('Login successful:', { token: data.token, user: data.user });
         onLogin(data.token, data.user)
       } else {
-        setError(data.error || 'Something went wrong')
+        console.error('Login failed:', data);
+        setError(data.error || 'Invalid username or password')
       }
     } catch (err) {
-      setError('Network error. Please try again.')
+      console.error('Login error:', err);
+      setError('Network error. Please check if the backend server is running.')
     } finally {
       setLoading(false)
     }

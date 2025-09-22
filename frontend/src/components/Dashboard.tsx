@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Dashboard.css'
+import VideoFeed from './VideoFeed'
 
 interface Camera {
   id: string
@@ -17,13 +18,18 @@ interface Alert {
   confidence?: number
 }
 
+import type { User } from '../types/user'
+
 interface DashboardProps {
   token: string
-  user: any
+  user: User | null
   onLogout: () => void
 }
 
 export default function Dashboard({ token, user, onLogout }: DashboardProps) {
+  if (!user) {
+    return null; // or return a loading state or redirect to login
+  }
   const [cameras, setCameras] = useState<Camera[]>([])
   const [showAddCamera, setShowAddCamera] = useState(false)
   const [newCamera, setNewCamera] = useState({
@@ -74,12 +80,37 @@ export default function Dashboard({ token, user, onLogout }: DashboardProps) {
     }
   }
 
+  const handleDeleteCamera = async (cameraId: string) => {
+    if (!window.confirm('Are you sure you want to delete this camera?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/cameras/${cameraId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        // Remove camera from local state
+        setCameras(cameras.filter(cam => cam.id !== cameraId));
+      } else {
+        const error = await response.json();
+        alert(error.message || 'Failed to delete camera');
+      }
+    } catch (error) {
+      console.error('Failed to delete camera:', error);
+      alert('Failed to delete camera. Please try again.');
+    }
+  }
+
   return (
     <div className="dashboard">
       <header className="dashboard-header">
-        <div>
-          <h1>🎯 Skylark Dashboard</h1>
-          <p>Welcome, {user.username}!</p>
+        <div className="header-content">
+          <div className="app-name">Real-Time Multi-Camera Face Detection Dashboard</div>
         </div>
         <button onClick={onLogout} className="logout-btn">
           Logout
@@ -144,17 +175,26 @@ export default function Dashboard({ token, user, onLogout }: DashboardProps) {
               cameras.map(camera => (
                 <div key={camera.id} className="camera-card">
                   <div className="camera-header">
-                    <h3>{camera.name}</h3>
-                    <span className={`status ${camera.isEnabled ? 'online' : 'offline'}`}>
-                      {camera.isEnabled ? '🟢 Online' : '🔴 Offline'}
-                    </span>
+                    <div className="camera-header-main">
+                      <h3>{camera.name}</h3>
+                      <span className={`status ${camera.isEnabled ? 'online' : 'offline'}`}>
+                        {camera.isEnabled ? '🟢 Online' : '🔴 Offline'}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={() => handleDeleteCamera(camera.id)}
+                      className="delete-btn"
+                      title="Delete Camera"
+                    >
+                      🗑️
+                    </button>
                   </div>
                   <div className="camera-video">
-                    <div className="video-placeholder">
-                      📹 Video Feed
-                      <br />
-                      <small>WebRTC Coming Soon...</small>
-                    </div>
+                    <VideoFeed
+                      cameraId={camera.id}
+                      cameraName={camera.name}
+                      rtspUrl={camera.rtspUrl}
+                    />
                   </div>
                   <div className="camera-info">
                     <p>📍 {camera.location || 'No location'}</p>

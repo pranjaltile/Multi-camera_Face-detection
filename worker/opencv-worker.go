@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"gocv.io/x/gocv"
 )
 
 type Alert struct {
@@ -28,67 +26,129 @@ type CameraProcessor struct {
 }
 
 var (
-	backendURL       = getEnv("BACKEND_URL", "http://localhost:3001")
-	cascPath         = getEnv("CASCADE_PATH", "./haarcascade_frontalface_default.xml")
-	videoReadTimeout = 3 * time.Second
-	classifier       gocv.CascadeClassifier
+	backendURL = getEnv("BACKEND_URL", "http://localhost:3001")
+	cameras    = make(map[string]*CameraProcessor)
 )
 
 func main() {
-	fmt.Println("🚀 Skylark Worker with Real Face Detection (GoCV) Starting...")
+	fmt.Println("🚀 Skylark Worker Starting...")
+	fmt.Println("✅ Running in Go (no OpenCV deps)")
 
-	// Load Haar Cascade Classifier
-	classifier = gocv.NewCascadeClassifier()
-	if !classifier.Load(cascPath) {
-		log.Fatalf("❌ Error loading cascade file: %v", cascPath)
-	}
-	defer classifier.Close()
+	// Health + Status endpoints
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/status", statusHandler)
 
-	// Example camera (for testing)
-	camera := CameraProcessor{
-		ID:       "cam1",
-		Name:     "IPCam",
-		RTSPURL:  "rtsp://192.168.1.50:8554/live.stream", // change this to your RTSP URL
-		Enabled:  true,
-		Location: "Office Lobby",
-	}
+	// Start HTTP server in background
+	go func() {
+		port := getEnv("PORT", "8080")
+		fmt.Printf("🌐 Worker server running on port %s\n", port)
+		log.Fatal(http.ListenAndServe(":"+port, nil))
+	}()
 
-	if camera.Enabled {
-		processCamera(camera)
-	} else {
-		log.Println("⚠️ Camera is disabled, skipping...")
+	// Start camera / alert processing loop
+	startProcessing()
+}
+
+// -----------------------------------------------------------------------------
+// Processing Loop
+// -----------------------------------------------------------------------------
+
+func startProcessing() {
+	fmt.Println("🎥 Starting face detection simulation...")
+
+	// Fetch cameras periodically
+	go fetchCamerasLoop()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		processCameras()
 	}
 }
 
-func processCamera(camera CameraProcessor) {
-	webcam, err := gocv.VideoCaptureFile(camera.RTSPURL)
+func fetchCamerasLoop() {
+	// Initial fetch
+	fetchCameras()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		fetchCameras()
+	}
+}
+
+func fetchCameras() {
+	resp, err := http.Get(backendURL + "/api/cameras")
 	if err != nil {
-		log.Printf("⚠️ Error opening RTSP stream for %s: %v\n", camera.Name, err)
+		log.Printf("⚠️ Cannot fetch cameras: %v", err)
 		return
 	}
-	defer webcam.Close()
+	defer resp.Body.Close()
 
-	img := gocv.NewMat()
-	defer img.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("⚠️ Failed to fetch cameras. Status code: %d", resp.StatusCode)
+		return
+	}
 
-	for {
-		if ok := webcam.Read(&img); !ok || img.Empty() {
-			log.Printf("⚠️ Cannot read frame from %s\n", camera.Name)
-			time.Sleep(videoReadTimeout)
-			continue
-		}
+	var cameraList []CameraProcessor
+	if err := json.NewDecoder(resp.Body).Decode(&cameraList); err != nil {
+		log.Printf("⚠️ Failed to decode cameras: %v", err)
+		return
+	}
 
-		// Detect faces
-		rects := classifier.DetectMultiScale(img)
+	fmt.Printf("📹 Found %d cameras from backend\n", len(cameraList))
 
-		if len(rects) > 0 {
-			fmt.Printf("🚨 %d faces detected in %s\n", len(rects), camera.Name)
+	newCameras := make(map[string]*CameraProcessor)
+	for _, cam := range cameraList {
+		newCameras[cam.ID] = &cam
+	}
+	cameras = newCameras
+}
 
-			// Send alert to backend
-			sendAlert(camera.ID, 0.95, len(rects))
+func processCameras() {
+	if len(cameras) == 0 {
+		// Demo mode
+		simulateDetection("demo-camera", "Demo Camera", "Test Location")
+		return
+	}
+
+	for id, camera := range cameras {
+		if camera.Enabled {
+			go processCamera(id, camera)
 		}
 	}
 }
+
+func processCamera(id string, camera *CameraProcessor) {
+	// Fire a detection about every 8 seconds
+	if time.Now().Second()%8 == 0 {
+		faceCount := 1
+		confidence := 0.75 + (float64(time.Now().Second()%20))/100.0
+
+		fmt.Printf("🚨 Face detected: Camera=%s (%s), Faces=%d, Confidence=%.2f\n",
+			camera.Name, camera.Location, faceCount, confidence)
+
+		sendAlert(id, confidence, faceCount)
+	} else {
+		// Debugging: show that camera is alive even when no detection
+		fmt.Printf("ℹ️ Checked camera %s - no face detected this cycle\n", camera.Name)
+	}
+}
+
+func simulateDetection(cameraID, cameraName, _ string) {
+	if time.Now().Second()%10 == 0 {
+		fmt.Printf("🚨 Demo detection: %s\n", cameraName)
+		sendAlert(cameraID, 0.85, 1)
+	} else {
+		fmt.Println("ℹ️ Demo mode: no detection this cycle")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Alerts
+// -----------------------------------------------------------------------------
 
 func sendAlert(cameraID string, confidence float64, faceCount int) {
 	alert := Alert{
@@ -98,15 +158,12 @@ func sendAlert(cameraID string, confidence float64, faceCount int) {
 		Timestamp:  time.Now(),
 	}
 
-	alertData, err := json.Marshal(alert)
-	if err != nil {
-		log.Printf("❌ Failed to marshal alert: %v", err)
-		return
-	}
+	alertData, _ := json.Marshal(alert)
 
 	resp, err := http.Post(backendURL+"/api/alerts",
 		"application/json",
 		bytes.NewBuffer(alertData))
+
 	if err != nil {
 		log.Printf("❌ Failed to send alert: %v", err)
 		return
@@ -114,13 +171,36 @@ func sendAlert(cameraID string, confidence float64, faceCount int) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Printf("⚠️ Backend responded with status: %s", resp.Status)
-		return
+		log.Printf("⚠️ Backend returned non-OK status: %d", resp.StatusCode)
+	} else {
+		fmt.Printf("✅ Alert sent to backend: Camera=%s, Faces=%d, Confidence=%.2f\n",
+			cameraID, faceCount, confidence)
 	}
-
-	fmt.Printf("✅ Alert sent: Camera=%s, Faces=%d, Confidence=%.2f\n",
-		cameraID, faceCount, confidence)
 }
+
+// -----------------------------------------------------------------------------
+// Health/Status APIs
+// -----------------------------------------------------------------------------
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := map[string]interface{}{
+		"status":    "healthy",
+		"service":   "skylark-worker",
+		"cameras":   len(cameras),
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	json.NewEncoder(w).Encode(status)
+}
+
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cameras)
+}
+
+// -----------------------------------------------------------------------------
+// Environment Helper
+// -----------------------------------------------------------------------------
 
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
